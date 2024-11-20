@@ -1,0 +1,15 @@
+# Virtuelle Umgebung
+venv/
+*.pyc
+__pycache__/
+
+# Logdateien
+*.log
+
+# Backup-Dateien
+backup.log
+backup_config.ini
+
+# Sonstige temporäre Dateien
+*.swp
+.DS_Store
