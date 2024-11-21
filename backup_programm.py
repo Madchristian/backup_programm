@@ -12,6 +12,8 @@ import requests
 from tqdm import tqdm  # Fortschrittsbalken-Bibliothek
 import tarfile
 from colorama import init, Fore, Style
+import socket
+
 
 init(autoreset=True)
 
@@ -47,41 +49,62 @@ class BackupManager:
 
     def backup_homes(self):
         date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        if self.compress_backups:
-            backup_filename = f'backup_{date_str}.tar.gz'
-            backup_path = os.path.join(self.nfs_mount_point, backup_filename)
-        else:
-            backup_path = os.path.join(self.nfs_mount_point, f'backup_{date_str}')
+        hostname = socket.gethostname()
 
-        if not os.path.ismount(self.nfs_mount_point):
-            logging.error(f'NFS-Share {self.nfs_mount_point} ist nicht gemountet.')
-            self.notifier.send_notification(f'🔴 Backup fehlgeschlagen: NFS-Share {self.nfs_mount_point} ist nicht gemountet.')
-            return False
+        # Pfad zum Host-Verzeichnis
+        host_dir = os.path.join(self.nfs_mount_point, hostname)
 
-        try:
-            if self.compress_backups:
-                # Komprimiertes Backup mit Fortschrittsanzeige erstellen
-                self.create_tar_with_progress(backup_path)
-                logging.info(f'Komprimiertes Backup erfolgreich erstellt: {backup_path}')
-            else:
-                # Unkomprimiertes Backup erstellen
-                self.rsync_backup(backup_path)
-                logging.info(f'Backup erfolgreich auf {backup_path} erstellt.')
+        # Sicherstellen, dass das Host-Verzeichnis existiert
+        os.makedirs(host_dir, exist_ok=True)
 
-            self.notifier.send_notification(f'🟢 Backup erfolgreich erstellt: {backup_path}')
-            return True
-        except Exception as e:
-            logging.error(f'Backup fehlgeschlagen: {e}')
-            self.notifier.send_notification(f'🔴 Backup fehlgeschlagen: {e}')
-            return False
-
-    def create_tar_with_progress(self, backup_path):
+        # Benutzerverzeichnisse ermitteln
         home_dir = '/home'
+        user_dirs = [d for d in os.listdir(home_dir) if os.path.isdir(os.path.join(home_dir, d))]
+
+        for user in user_dirs:
+            user_home = os.path.join(home_dir, user)
+            user_backup_dir = os.path.join(host_dir, user)
+            os.makedirs(user_backup_dir, exist_ok=True)
+
+            if self.compress_backups:
+                backup_filename = f'backup_{date_str}.tar.gz'
+                backup_path = os.path.join(user_backup_dir, backup_filename)
+            else:
+                backup_dirname = f'backup_{date_str}'
+                backup_path = os.path.join(user_backup_dir, backup_dirname)
+
+            # Überprüfen, ob NFS gemountet ist
+            if not os.path.ismount(self.nfs_mount_point):
+                logging.error(f'NFS-Share {self.nfs_mount_point} ist nicht gemountet.')
+                self.notifier.send_notification(f'🔴 Backup fehlgeschlagen: NFS-Share {self.nfs_mount_point} ist nicht gemountet.')
+                return False
+
+            try:
+                if self.compress_backups:
+                    # Komprimiertes Backup erstellen
+                    self.create_tar_with_progress(backup_path, user_home)
+                    logging.info(f'Komprimiertes Backup für Benutzer {user} erfolgreich erstellt: {backup_path}')
+                else:
+                    # Unkomprimiertes Backup erstellen
+                    self.rsync_backup(backup_path, user_home)
+                    logging.info(f'Backup für Benutzer {user} erfolgreich auf {backup_path} erstellt.')
+
+                self.notifier.send_notification(f'🟢 Backup für Benutzer {user} erfolgreich erstellt: {backup_path}')
+            except Exception as e:
+                logging.error(f'Backup für Benutzer {user} fehlgeschlagen: {e}')
+                self.notifier.send_notification(f'🔴 Backup für Benutzer {user} fehlgeschlagen: {e}')
+                return False
+
+        return True
+
+
+
+    def create_tar_with_progress(self, backup_path, source_dir):
         file_list = []
         total_size = 0
 
         # Sammeln aller Dateien und Berechnung der Gesamtgröße
-        for root, dirs, files in os.walk(home_dir):
+        for root, dirs, files in os.walk(source_dir):
             for file in files:
                 file_path = os.path.join(root, file)
                 file_list.append(file_path)
@@ -94,7 +117,7 @@ class BackupManager:
             with tqdm(total=total_size, unit='B', unit_scale=True, desc="Erstelle Backup") as progress_bar:
                 for file_path in file_list:
                     try:
-                        arcname = os.path.relpath(file_path, '/')
+                        arcname = os.path.relpath(file_path, source_dir)
                         tar.add(file_path, arcname=arcname)
                         # Aktualisieren des Fortschrittsbalkens
                         file_size = os.path.getsize(file_path)
@@ -104,6 +127,7 @@ class BackupManager:
                         logging.warning(f'Zugriff verweigert: {file_path}')
                     except Exception as e:
                         logging.error(f'Fehler beim Hinzufügen von {file_path}: {e}')
+
 
     def get_directory_size(self, directory):
         total = 0
@@ -116,15 +140,24 @@ class BackupManager:
                     continue
         return total
 
-    def rsync_backup(self, backup_path):
-        subprocess.run(['rsync', '-a', '/home/', backup_path], check=True)
+    def rsync_backup(self, backup_path, source_dir):
+        subprocess.run(['rsync', '-a', f'{source_dir}/', backup_path], check=True)
 
     def rotate_backups(self):
         cutoff_date = datetime.now() - timedelta(days=self.retention_days)
-        for item in os.listdir(self.nfs_mount_point):
-            item_path = os.path.join(self.nfs_mount_point, item)
-            if item.startswith('backup_'):
-                # Datum extrahieren
+        hostname = socket.gethostname()
+        host_dir = os.path.join(self.nfs_mount_point, hostname)
+
+        if not os.path.exists(host_dir):
+            return
+
+        for user in os.listdir(host_dir):
+            user_backup_dir = os.path.join(host_dir, user)
+            if not os.path.isdir(user_backup_dir):
+                continue
+            for item in os.listdir(user_backup_dir):
+                item_path = os.path.join(user_backup_dir, item)
+                # Datum aus dem Backup-Namen extrahieren
                 date_str = item.replace('backup_', '').replace('.tar.gz', '')
                 try:
                     item_date = datetime.strptime(date_str, '%Y-%m-%d_%H-%M-%S')
@@ -138,55 +171,58 @@ class BackupManager:
                 except ValueError:
                     continue
 
+
     def list_backups(self):
         backups = []
-        for item in os.listdir(self.nfs_mount_point):
-            if item.startswith('backup_'):
-                backups.append(item)
-        backups.sort()
+        host_dir = os.path.join(self.nfs_mount_point, socket.gethostname())
+        if not os.path.exists(host_dir):
+            return backups
+
+        for user in os.listdir(host_dir):
+            user_backup_dir = os.path.join(host_dir, user)
+            if not os.path.isdir(user_backup_dir):
+                continue
+            for backup in os.listdir(user_backup_dir):
+                backup_path = os.path.join(user_backup_dir, backup)
+                backups.append({
+                    'user': user,
+                    'backup': backup,
+                    'path': backup_path
+                })
+        # Sortieren der Backups nach Datum (optional)
+        backups.sort(key=lambda x: x['backup'])
         return backups
 
-    def restore_backup(self):
-        backups = self.backup_manager.list_backups()
-        if not backups:
-            print("Keine Backups verfügbar.")
-            return
 
-        print("\nVerfügbare Backups:")
-        for idx, backup in enumerate(backups, 1):
-            print(f"{idx}. {backup}")
-        print("0. Abbrechen")
+    def restore_backup(self, backup_path):
+        if not os.path.exists(backup_path):
+            logging.error(f"Backup {backup_path} existiert nicht.")
+            self.notifier.send_notification(f"🔴 Restore fehlgeschlagen: Backup {backup_path} existiert nicht.")
+            return False
 
-        while True:
-            choice = input("Bitte wählen Sie ein Backup zum Wiederherstellen (Nummer, 0 zum Abbrechen): ")
-            if choice == '0':
-                print("Wiederherstellung abgebrochen.")
-                return
-            try:
-                idx = int(choice) - 1
-                if idx < 0 or idx >= len(backups):
-                    raise ValueError
-                backup_name = backups[idx]
-                confirm = input(f"Sind Sie sicher, dass Sie {backup_name} wiederherstellen möchten? (ja/nein): ")
-                if confirm.lower() == 'ja':
-                    success = self.backup_manager.restore_backup(backup_name)
-                    if success:
-                        print("Restore erfolgreich abgeschlossen.")
-                    else:
-                        print("Restore fehlgeschlagen. Siehe Logs für Details.")
-                    return  # Nach erfolgreichem oder fehlgeschlagenem Restore zum Hauptmenü zurückkehren
-                else:
-                    print("Wiederherstellung abgebrochen.")
-                    return
-            except ValueError:
-                print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
+        try:
+            if backup_path.endswith('.tar.gz'):
+                # Komprimiertes Backup wiederherstellen
+                subprocess.run(['tar', '-xzf', backup_path, '-C', '/'], check=True)
+                logging.info(f"Backup {backup_path} erfolgreich wiederhergestellt.")
+            else:
+                # Unkomprimiertes Backup wiederherstellen
+                subprocess.run(['rsync', '-a', backup_path + '/', '/home/'], check=True)
+                logging.info(f"Backup {backup_path} erfolgreich wiederhergestellt.")
+
+            self.notifier.send_notification(f"🟢 Restore erfolgreich: {backup_path}")
+            return True
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Restore fehlgeschlagen: {e}")
+            self.notifier.send_notification(f"🔴 Restore fehlgeschlagen: {e}")
+            return False
 
 
-    def search_file_in_backup(self, backup_name, search_query):
-        backup_path = os.path.join(self.nfs_mount_point, backup_name)
+
+    def search_file_in_backup(self, backup_path, search_query):
         matching_files = []
         try:
-            if backup_name.endswith('.tar.gz'):
+            if backup_path.endswith('.tar.gz'):
                 # Inhalte des Archivs auflisten
                 result = subprocess.run(['tar', '-tzf', backup_path], capture_output=True, text=True)
                 files = result.stdout.splitlines()
@@ -206,49 +242,77 @@ class BackupManager:
 
             return matching_files
         except subprocess.CalledProcessError as e:
-            logging.error(f'Suche fehlgeschlagen: {e}')
+            logging.error(f"Suche fehlgeschlagen: {e}")
             return []
+
 
     def restore_file(self):
         backups = self.backup_manager.list_backups()
         if not backups:
             print("Keine Backups verfügbar.")
             return
-    
-        print("\nVerfügbare Backups:")
-        for idx, backup in enumerate(backups, 1):
-            print(f"{idx}. {backup}")
+
+        # Benutzer auswählen
+        users = sorted(set([b['user'] for b in backups]))
+        print("\nVerfügbare Benutzer:")
+        for idx, user in enumerate(users, 1):
+            print(f"{idx}. {user}")
         print("0. Abbrechen")
-    
+
+        while True:
+            user_choice = input("Bitte wählen Sie einen Benutzer (Nummer, 0 zum Abbrechen): ")
+            if user_choice == '0':
+                print("Vorgang abgebrochen.")
+                return
+            try:
+                user_idx = int(user_choice) - 1
+                if user_idx < 0 or user_idx >= len(users):
+                    raise ValueError
+                selected_user = users[user_idx]
+                break
+            except ValueError:
+                print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
+
+        # Backups für den ausgewählten Benutzer
+        user_backups = [b for b in backups if b['user'] == selected_user]
+        if not user_backups:
+            print(f"Keine Backups für Benutzer {selected_user} verfügbar.")
+            return
+
+        print(f"\nVerfügbare Backups für Benutzer {selected_user}:")
+        for idx, backup in enumerate(user_backups, 1):
+            print(f"{idx}. {backup['backup']}")
+        print("0. Abbrechen")
+
         while True:
             backup_choice = input("Bitte wählen Sie ein Backup zum Durchsuchen (Nummer, 0 zum Abbrechen): ")
             if backup_choice == '0':
                 print("Vorgang abgebrochen.")
                 return
             try:
-                idx = int(backup_choice) - 1
-                if idx < 0 or idx >= len(backups):
+                backup_idx = int(backup_choice) - 1
+                if backup_idx < 0 or backup_idx >= len(user_backups):
                     raise ValueError
-                backup_name = backups[idx]
+                selected_backup = user_backups[backup_idx]
                 break
             except ValueError:
                 print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
-    
+
         search_query = input("Bitte geben Sie den Dateinamen oder einen Teil davon ein (leer zum Abbrechen): ")
         if not search_query:
             print("Vorgang abgebrochen.")
             return
-    
-        matching_files = self.backup_manager.search_file_in_backup(backup_name, search_query)
+
+        matching_files = self.backup_manager.search_file_in_backup(selected_backup['path'], search_query)
         if not matching_files:
             print("Keine passenden Dateien gefunden.")
             return
-    
+
         print("\nGefundene Dateien:")
         for idx, file in enumerate(matching_files, 1):
             print(f"{idx}. {file}")
         print("0. Abbrechen")
-    
+
         while True:
             file_choice = input("Bitte wählen Sie eine Datei zum Wiederherstellen (Nummer, 0 zum Abbrechen): ")
             if file_choice == '0':
@@ -261,7 +325,7 @@ class BackupManager:
                 file_path = matching_files[file_idx]
                 confirm = input(f"Sind Sie sicher, dass Sie die Datei '{file_path}' wiederherstellen möchten? (ja/nein): ")
                 if confirm.lower() == 'ja':
-                    success = self.backup_manager.restore_file_from_backup(backup_name, file_path)
+                    success = self.backup_manager.restore_file_from_backup(selected_backup['path'], file_path)
                     if success:
                         print("Datei erfolgreich wiederhergestellt.")
                     else:
@@ -272,6 +336,7 @@ class BackupManager:
                     return
             except ValueError:
                 print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
+
     
 
 class Scheduler:
@@ -422,26 +487,63 @@ class CLI:
         if not backups:
             print("Keine Backups verfügbar.")
             return
-
-        print("\nVerfügbare Backups:")
-        for idx, backup in enumerate(backups, 1):
-            print(f"{idx}. {backup}")
-
-        choice = input("Bitte wählen Sie ein Backup zum Wiederherstellen (Nummer): ")
-        try:
-            idx = int(choice) - 1
-            if idx < 0 or idx >= len(backups):
-                raise ValueError
-            backup_name = backups[idx]
-            confirm = input(f"Sind Sie sicher, dass Sie {backup_name} wiederherstellen möchten? (ja/nein): ")
-            if confirm.lower() == 'ja':
-                success = self.backup_manager.restore_backup(backup_name)
-                if success:
-                    print("Restore erfolgreich abgeschlossen.")
+    
+        # Benutzer auswählen
+        users = sorted(set([b['user'] for b in backups]))
+        print("\nVerfügbare Benutzer:")
+        for idx, user in enumerate(users, 1):
+            print(f"{idx}. {user}")
+        print("0. Abbrechen")
+    
+        while True:
+            user_choice = input("Bitte wählen Sie einen Benutzer (Nummer, 0 zum Abbrechen): ")
+            if user_choice == '0':
+                print("Wiederherstellung abgebrochen.")
+                return
+            try:
+                user_idx = int(user_choice) - 1
+                if user_idx < 0 or user_idx >= len(users):
+                    raise ValueError
+                selected_user = users[user_idx]
+                break
+            except ValueError:
+                print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
+    
+        # Backups für den ausgewählten Benutzer
+        user_backups = [b for b in backups if b['user'] == selected_user]
+        if not user_backups:
+            print(f"Keine Backups für Benutzer {selected_user} verfügbar.")
+            return
+    
+        print(f"\nVerfügbare Backups für Benutzer {selected_user}:")
+        for idx, backup in enumerate(user_backups, 1):
+            print(f"{idx}. {backup['backup']}")
+        print("0. Abbrechen")
+    
+        while True:
+            backup_choice = input("Bitte wählen Sie ein Backup zum Wiederherstellen (Nummer, 0 zum Abbrechen): ")
+            if backup_choice == '0':
+                print("Wiederherstellung abgebrochen.")
+                return
+            try:
+                backup_idx = int(backup_choice) - 1
+                if backup_idx < 0 or backup_idx >= len(user_backups):
+                    raise ValueError
+                selected_backup = user_backups[backup_idx]
+                confirm = input(f"Sind Sie sicher, dass Sie das Backup '{selected_backup['backup']}' für Benutzer '{selected_user}' wiederherstellen möchten? (ja/nein): ")
+                if confirm.lower() == 'ja':
+                    success = self.backup_manager.restore_backup(selected_backup['path'])
+                    if success:
+                        print("Restore erfolgreich abgeschlossen.")
+                    else:
+                        print("Restore fehlgeschlagen. Siehe Logs für Details.")
+                    return
                 else:
-                    print("Restore fehlgeschlagen. Siehe Logs für Details.")
-        except ValueError:
-            print("Ungültige Auswahl.")
+                    print("Wiederherstellung abgebrochen.")
+                    return
+            except ValueError:
+                print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
+    
 
     def restore_file(self):
         backups = self.backup_manager.list_backups()

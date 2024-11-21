@@ -22,8 +22,7 @@ install_debian() {
     source $VENV_DIR/bin/activate
 
     # Installiere Python-Abhängigkeiten innerhalb der virtuellen Umgebung
-    pip install requests
-    pip install tqdm
+    pip install -r requirements.txt
 
     echo "Alle Abhängigkeiten wurden erfolgreich installiert (Debian/Ubuntu)."
 }
@@ -45,8 +44,7 @@ install_centos() {
     source $VENV_DIR/bin/activate
 
     # Installiere Python-Abhängigkeiten innerhalb der virtuellen Umgebung
-    pip install requests
-    pip install tqdm
+    pip install -r requirements.txt
     echo "Alle Abhängigkeiten wurden erfolgreich installiert (CentOS/RHEL)."
 }
 
@@ -67,8 +65,7 @@ install_fedora() {
     source $VENV_DIR/bin/activate
 
     # Installiere Python-Abhängigkeiten innerhalb der virtuellen Umgebung
-    pip install requests
-    pip install tqdm
+    pip install -r requirements.txt
     
     echo "Alle Abhängigkeiten wurden erfolgreich installiert (Fedora)."
 }
