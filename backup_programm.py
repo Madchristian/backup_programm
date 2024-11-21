@@ -219,7 +219,8 @@ class BackupManager:
 
 
 
-    def search_file_in_backup(self, backup_path, search_query):
+    def search_file_in_backup(self, backup, search_query):
+        backup_path = backup['path']
         matching_files = []
         try:
             if backup_path.endswith('.tar.gz'):
@@ -244,6 +245,30 @@ class BackupManager:
         except subprocess.CalledProcessError as e:
             logging.error(f"Suche fehlgeschlagen: {e}")
             return []
+
+
+    def restore_file_from_backup(self, backup, file_path):
+        backup_path = backup['path']
+        try:
+            if backup_path.endswith('.tar.gz'):
+                # Einzelne Datei aus dem Archiv extrahieren
+                subprocess.run(['tar', '-xzf', backup_path, '-C', '/', file_path], check=True)
+                logging.info(f"Datei {file_path} erfolgreich aus {backup_path} wiederhergestellt.")
+            else:
+                # Einzelne Datei mit rsync wiederherstellen
+                src_path = os.path.join(backup_path, file_path)
+                dest_path = os.path.join('/', file_path)
+                dest_dir = os.path.dirname(dest_path)
+                os.makedirs(dest_dir, exist_ok=True)
+                subprocess.run(['rsync', '-a', src_path, dest_path], check=True)
+                logging.info(f"Datei {file_path} erfolgreich aus {backup_path} wiederhergestellt.")
+
+            self.notifier.send_notification(f"🟢 Datei {file_path} erfolgreich wiederhergestellt aus {backup_path}")
+            return True
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Wiederherstellung der Datei fehlgeschlagen: {e}")
+            self.notifier.send_notification(f"🔴 Wiederherstellung der Datei fehlgeschlagen: {e}")
+            return False
 
 
     def restore_file(self):
@@ -487,14 +512,14 @@ class CLI:
         if not backups:
             print("Keine Backups verfügbar.")
             return
-    
+
         # Benutzer auswählen
         users = sorted(set([b['user'] for b in backups]))
         print("\nVerfügbare Benutzer:")
         for idx, user in enumerate(users, 1):
             print(f"{idx}. {user}")
         print("0. Abbrechen")
-    
+
         while True:
             user_choice = input("Bitte wählen Sie einen Benutzer (Nummer, 0 zum Abbrechen): ")
             if user_choice == '0':
@@ -508,18 +533,18 @@ class CLI:
                 break
             except ValueError:
                 print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
-    
+
         # Backups für den ausgewählten Benutzer
         user_backups = [b for b in backups if b['user'] == selected_user]
         if not user_backups:
             print(f"Keine Backups für Benutzer {selected_user} verfügbar.")
             return
-    
+
         print(f"\nVerfügbare Backups für Benutzer {selected_user}:")
         for idx, backup in enumerate(user_backups, 1):
             print(f"{idx}. {backup['backup']}")
         print("0. Abbrechen")
-    
+
         while True:
             backup_choice = input("Bitte wählen Sie ein Backup zum Wiederherstellen (Nummer, 0 zum Abbrechen): ")
             if backup_choice == '0':
@@ -543,7 +568,7 @@ class CLI:
                     return
             except ValueError:
                 print("Ungültige Auswahl. Bitte versuchen Sie es erneut.")
-    
+
 
     def restore_file(self):
         backups = self.backup_manager.list_backups()
