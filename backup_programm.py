@@ -677,4 +677,18 @@ class CLI:
 
 
 if __name__ == '__main__':
-    CLI()
+    if len(sys.argv) > 1 and sys.argv[1] == '--service':
+        # Service-Modus: keine Benutzerinteraktion, nur geplante Backups
+        config = Config()
+        notifier = NotificationManager(config.discord_webhook_url)
+        backup_manager = BackupManager(
+            config.nfs_mount_point,
+            config.retention_days,
+            notifier,
+            config.compress_backups
+        )
+        backup_manager.backup_homes()
+        backup_manager.rotate_backups()
+    else:
+        # Interaktiver Modus für manuelle Nutzung
+        CLI()
