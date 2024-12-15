@@ -141,7 +141,7 @@ class CLI:
                 selected_backup = user_backups[backup_idx]
                 confirm = input(f"Sind Sie sicher, dass Sie das Backup '{selected_backup['backup']}' wiederherstellen möchten? (ja/nein): ")
                 if confirm.lower() == 'ja':
-                    success = self.backup_manager.restore_backup(selected_backup['path'])
+                    success = self.backup_manager.restore_backup(selected_backup['path'], selected_user)
                     if success:
                         print("Restore erfolgreich abgeschlossen.")
                     else:

@@ -160,33 +160,50 @@ class BackupManager:
         return backups
 
 
-    def restore_backup(self, backup_path):
+    def restore_backup(self, backup_path, target_user):
         if not os.path.exists(backup_path):
             logging.error(f"Backup {backup_path} existiert nicht.")
             self.notifier.send_notification(f"🔴 Restore fehlgeschlagen: Backup {backup_path} existiert nicht.")
             return False
 
+        user_home_dir = f"/home/{target_user}"
+        os.makedirs(user_home_dir, exist_ok=True)
+
         try:
             if backup_path.endswith('.tar.gz'):
                 # Verzeichnisse auslesen und erstellen
-                self.ensure_directories_exist(backup_path)
+                self.ensure_directories_exist(backup_path, user_home_dir)
 
-                # Komprimiertes Backup wiederherstellen
-                subprocess.run(['tar', '-xzf', backup_path, '-C', '/'], check=True)
-                logging.info(f"Backup {backup_path} erfolgreich wiederhergestellt.")
+                # Komprimiertes Backup wiederherstellen mit Fortschrittsanzeige
+                self.restore_with_progress(backup_path, user_home_dir)
+                logging.info(f"Backup {backup_path} erfolgreich für Benutzer {target_user} wiederhergestellt.")
             else:
                 # Unkomprimiertes Backup wiederherstellen
-                subprocess.run(['rsync', '-a', backup_path + '/', '/home/'], check=True)
-                logging.info(f"Backup {backup_path} erfolgreich wiederhergestellt.")
+                subprocess.run(['rsync', '-a', backup_path + '/', user_home_dir + '/'], check=True)
+                logging.info(f"Backup {backup_path} erfolgreich für Benutzer {target_user} wiederhergestellt.")
 
-            self.notifier.send_notification(f"🟢 Restore erfolgreich: {backup_path}")
+            self.notifier.send_notification(f"🟢 Restore erfolgreich für Benutzer {target_user}: {backup_path}")
             return True
         except subprocess.CalledProcessError as e:
             logging.error(f"Restore fehlgeschlagen: {e}")
             self.notifier.send_notification(f"🔴 Restore fehlgeschlagen: {e}")
             return False
 
-    def ensure_directories_exist(self, backup_path):
+    def restore_with_progress(self, backup_path, target_path):
+        try:
+            with tarfile.open(backup_path, 'r:gz') as tar:
+                members = tar.getmembers()
+                total_size = sum(member.size for member in members)
+
+                with tqdm(total=total_size, unit='B', unit_scale=True, desc="Wiederherstellen") as progress_bar:
+                    for member in members:
+                        tar.extract(member, path=target_path)
+                        progress_bar.update(member.size)
+        except Exception as e:
+            logging.error(f"Fehler bei der Wiederherstellung mit Fortschrittsanzeige: {e}")
+            raise
+
+    def ensure_directories_exist(self, backup_path, target_path):
         try:
             result = subprocess.run(['tar', '-tf', backup_path], capture_output=True, text=True, check=True)
             directories = set()
@@ -195,7 +212,7 @@ class BackupManager:
                     directories.add(line.rstrip('/'))
 
             for directory in sorted(directories):
-                full_path = os.path.join('/', directory)
+                full_path = os.path.join(target_path, directory)
                 os.makedirs(full_path, exist_ok=True)
                 logging.info(f"Erstelle fehlendes Verzeichnis: {full_path}")
         except subprocess.CalledProcessError as e:

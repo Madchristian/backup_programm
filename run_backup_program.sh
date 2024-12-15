@@ -11,5 +11,11 @@ fi
 # Virtuelle Umgebung aktivieren
 source $VENV_DIR/bin/activate
 
-# Backup-Programm starten
-python3 main.py
+# Argumente überprüfen
+if [[ "$1" == "--service" ]]; then
+    echo "Starte das Backup-Programm im Service-Modus..."
+    python3 main.py --service
+else
+    echo "Starte das Backup-Programm im interaktiven Modus..."
+    python3 main.py
+fi
