@@ -12,4 +12,4 @@ fi
 source $VENV_DIR/bin/activate
 
 # Backup-Programm starten
-python3 backup_programm.py
+python3 main.py

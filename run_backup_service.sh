@@ -12,4 +12,4 @@ fi
 source $VENV_DIR/bin/activate
 
 # Backup-Programm im Service-Modus starten
-python3 backup_programm.py --service
+python3 main.py --service
